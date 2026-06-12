@@ -535,7 +535,7 @@ class MacroApp:
             b.bind("<Leave>", lambda e, b=b: b.config(fg=C["muted"]))
             b.pack(side="left")
 
-        tk.Label(self.root, text=self.tr("hint") + "   ·   TDS v1.5",
+        tk.Label(self.root, text=self.tr("hint") + "   ·   TDS v1.6",
                  font=("Segoe UI", 8), fg=C["muted"], bg=C["bg"]).pack(pady=(0, 10))
 
     def _dark_titlebar(self):
@@ -1085,10 +1085,22 @@ class MacroApp:
     def _click_restart(self):
         r = self.tds_rect
         x, y = r["x"] + r["w"] // 2, r["y"] + r["h"] // 2
-        # ลากเมาส์ไปที่ปุ่มก่อน รอ 1 วินาทีให้ชัวร์ว่าเมาส์ถึงแล้ว ค่อยกด
+        off = r["h"] * 3  # ระยะขยับขึ้น-ลง = 3 เท่าของความสูงกรอบ
+        # วาร์ปไปที่ปุ่มก่อน
         self._move_to(x, y)
-        time.sleep(1.0)
-        self._move_to(x, y)  # ยืนยันตำแหน่งอีกครั้งกันเมาส์เลื่อน
+        time.sleep(0.3)
+        # ขยับ "ออกจากปุ่ม" (ขึ้นด้านบน) แล้วไหลกลับลงมาที่เดิมแบบทีละสเต็ป
+        # เพื่อให้ปุ่มเห็นเมาส์เคลื่อนเข้ามาจริงๆ -> hover/animation ทำงาน ปุ่มถึงรับคลิก
+        steps = 12
+        for i in range(1, steps + 1):        # ขึ้นออกนอกปุ่ม
+            self._move_to(x, y - off * i / steps)
+            time.sleep(0.02)
+        time.sleep(0.15)
+        for i in range(steps - 1, -1, -1):   # ไหลกลับลงมากลางปุ่ม
+            self._move_to(x, y - off * i / steps)
+            time.sleep(0.02)
+        time.sleep(0.4)  # ให้ animation ปุ่มทำงานจนเสร็จ
+        self._move_to(x, y)  # ยืนยันตำแหน่งกลางปุ่มอีกครั้ง
         time.sleep(0.05)
         try:
             if send_left is not None:
