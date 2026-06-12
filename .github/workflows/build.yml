@@ -18,11 +18,14 @@ jobs:
           python-version: "3.12"
       - name: Install dependencies
         run: pip install pynput pyinstaller
-      - name: Build exe
+      - name: Build Standard exe
         run: pyinstaller --onefile --noconsole --name MacroRecorder MacroRecorder.pyw
-      - name: Attach exe to release
+      - name: Build TDS exe
+        run: pyinstaller --onefile --noconsole --name MacroRecorder_TDS MacroRecorder_TDS.pyw
+      - name: Attach exes to release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/MacroRecorder.exe
-
+          files: |
+            dist/MacroRecorder.exe
+            dist/MacroRecorder_TDS.exe
