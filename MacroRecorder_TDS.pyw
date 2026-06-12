@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-Macro Recorder (Dark Mode) - บันทึกเมาส์/คีย์บอร์ดทุกอย่าง แล้วเล่นซ้ำได้
-รองรับ Windows และ Linux (X11)
+Macro Recorder TDS - บันทึกเมาส์/คีย์บอร์ดทุกอย่าง เล่นซ้ำได้
++ ตรวจจับปุ่ม Restart สีเขียวของ Tower Defense Simulator อัตโนมัติ
+รองรับ Windows และ Linux (X11) — ระบบตรวจจับปุ่ม/โหมด Roblox ใช้ได้เฉพาะ Windows
 
-Windows: ดับเบิลคลิกไฟล์นี้เพื่อเปิด (.pyw = ไม่มีหน้าต่างดำ)
-Linux:   pip3 install pynput  แล้วรัน  python3 MacroRecorder.pyw
-         (Wayland อาจใช้ไม่ได้เต็มรูปแบบ แนะนำ X11 session)
+Windows: ดับเบิลคลิกไฟล์นี้เพื่อเปิด
+Linux:   pip3 install pynput  แล้วรัน  python3 MacroRecorder_TDS.pyw
 
-ปุ่มลัด:  F3 = บันทึก/หยุดบันทึก   F4 = เล่น/หยุด   Esc = หยุด
+ปุ่มลัด:  F3 = บันทึก/หยุดบันทึก   F4 = เล่น/หยุด   F6 = กรอบตรวจจับ   Esc = หยุด
 """
 
 import json
@@ -128,10 +128,22 @@ if sys.platform == "win32":
     _u32.GetRawInputData.restype = ctypes.c_uint
     _u32.GetRawInputData.argtypes = (ctypes.c_ssize_t, ctypes.c_uint, ctypes.c_void_p,
                                      ctypes.POINTER(ctypes.c_uint), ctypes.c_uint)
+
+    # ---- อ่านสีพิกเซลบนจอ (ใช้ตรวจจับปุ่ม Restart สีเขียวของ TDS) ----
+    _gdi32 = ctypes.windll.gdi32
+
+    def get_pixel(x, y):
+        hdc = _u32.GetDC(0)
+        try:
+            c = _gdi32.GetPixel(hdc, int(x), int(y))
+        finally:
+            _u32.ReleaseDC(0, hdc)
+        return c & 0xFF, (c >> 8) & 0xFF, (c >> 16) & 0xFF  # (R, G, B)
 else:
     send_mouse_move = None
     send_mouse_move_rel = None
     send_key = None
+    get_pixel = None
 
 import tkinter as tk
 from tkinter import messagebox, simpledialog
@@ -180,7 +192,11 @@ L = {
         "delete": "ลบ",
         "folder": "โฟลเดอร์",
         "refresh": "รีเฟรช",
-        "hint": "F3 บันทึก  ·  F4 เล่น/หยุด  ·  Esc หยุด",
+        "hint": "F3 บันทึก  ·  F4 เล่น/หยุด  ·  F6 ตั้งปุ่ม Restart  ·  Esc หยุด",
+        "tds": "ตรวจจับปุ่ม Restart (TDS)",
+        "tds_set": "กรอบ (F6)",
+        "tds_saved": "บันทึกกรอบตรวจจับแล้ว ✓",
+        "tds_found": "เจอปุ่ม Restart! กดปุ่มแล้วเริ่มรอบใหม่...",
         "no_macro_t": "ไม่มี macro",
         "no_macro_m": "ยังไม่มี macro ให้เล่น — กด F3 เพื่อบันทึกก่อน",
         "save_fail": "บันทึกไม่สำเร็จ",
@@ -207,7 +223,11 @@ L = {
         "delete": "Delete",
         "folder": "Folder",
         "refresh": "Refresh",
-        "hint": "F3 record  ·  F4 play/stop  ·  Esc stop",
+        "hint": "F3 record  ·  F4 play/stop  ·  F6 set Restart btn  ·  Esc stop",
+        "tds": "Restart detection (TDS)",
+        "tds_set": "Zone (F6)",
+        "tds_saved": "Detection zone saved ✓",
+        "tds_found": "Restart found! Clicking & restarting...",
         "no_macro_t": "No macro",
         "no_macro_m": "Nothing to play yet — press F3 to record first",
         "save_fail": "Save failed",
@@ -234,7 +254,7 @@ def save_settings(d):
         pass
 
 
-HOTKEYS = {keyboard.Key.f3, keyboard.Key.f4, keyboard.Key.esc}
+HOTKEYS = {keyboard.Key.f3, keyboard.Key.f4, keyboard.Key.f6, keyboard.Key.esc}
 MOVE_INTERVAL = 0.002  # บันทึกตำแหน่งเมาส์ละเอียดสูงสุด ~500 ครั้ง/วินาที
 
 # ---------- ชุดสี Dark Mode ----------
@@ -290,6 +310,14 @@ class MacroApp:
         self._last_pos = (0, 0)
         self._game_sens = 1.0        # ตัวคูณความไวโหมดเกม
         self._rem = [0.0, 0.0]       # เศษเดลต้าสะสม (กันการปัดทิ้งจนหันช้า)
+        self._restart_pending = False
+        # กรอบตรวจจับปุ่ม Restart — กด F6 แสดง/ซ่อนกรอบบนจอ ลากย้าย+ปรับขนาดได้
+        # ค่าเริ่มต้นครอบปุ่ม Restart Match ที่จอ 2560x1440
+        old_pt = self.cfg.get("tds_point")
+        self.tds_rect = self.cfg.get("tds_rect") or (
+            {"x": old_pt["x"] - 153, "y": old_pt["y"] - 27, "w": 306, "h": 54}
+            if old_pt else {"x": 953, "y": 1108, "w": 306, "h": 54})
+        self._mark = None
 
         self._build_ui()
         self._refresh_list()
@@ -310,7 +338,8 @@ class MacroApp:
         save_settings(self.cfg)
         # เก็บค่าตัวเลือกเดิม แล้วสร้าง UI ใหม่ในภาษาที่เลือก
         vals = (self.loop_var.get(), self.speed_var.get(), self.gap_var.get(),
-                self.inf_var.get(), self.game_var.get(), self.cam_sens_var.get())
+                self.inf_var.get(), self.game_var.get(), self.cam_sens_var.get(),
+                self.tds_var.get())
         for w in self.root.winfo_children():
             w.destroy()
         self._build_ui()
@@ -320,6 +349,7 @@ class MacroApp:
         self.inf_var.set(vals[3])
         self.game_var.set(vals[4])
         self.cam_sens_var.set(vals[5])
+        self.tds_var.set(vals[6])
         self._refresh_list()
 
     @staticmethod
@@ -344,9 +374,9 @@ class MacroApp:
 
     # ---------------- UI ----------------
     def _build_ui(self):
-        self.root.title("Macro Recorder")
-        self.root.geometry("500x560")
-        self.root.minsize(500, 480)
+        self.root.title("Macro Recorder · TDS")
+        self.root.geometry("500x600")
+        self.root.minsize(500, 520)
         self.root.configure(bg=C["bg"])
         self.root.attributes("-topmost", True)
         self._dark_titlebar()
@@ -439,6 +469,20 @@ class MacroApp:
         opt_spin(self.cam_sens_var, from_=0.1, to=10, increment=0.1).grid(
             row=1, column=5, pady=(8, 12))
 
+        # ----- TDS: ตรวจจับปุ่ม Restart สีเขียว -----
+        self.tds_var = tk.BooleanVar(value=True)
+        opt_check(self.tr("tds"), self.tds_var).grid(
+            row=2, column=0, columnspan=3, padx=(12, 0), pady=(0, 12), sticky="w")
+        tds_btn = tk.Button(opt, text=self.tr("tds_set"), command=self._toggle_mark,
+                            font=("Segoe UI", 9), bg=C["gray"], fg=C["text"],
+                            activebackground=C["gray_h"], activeforeground=C["text"],
+                            relief="flat", bd=0, padx=8, pady=2, cursor="hand2")
+        tds_btn.grid(row=2, column=3, padx=(12, 6), pady=(0, 12), sticky="w")
+        self.tds_lbl = tk.Label(opt, text="", font=("Segoe UI", 8),
+                                fg=C["muted"], bg=C["card"])
+        self.tds_lbl.grid(row=2, column=4, columnspan=2, pady=(0, 12), sticky="w")
+        self._update_tds_lbl()
+
         # ----- รายการ macro -----
         tk.Label(self.root, text=self.tr("macro"), font=("Segoe UI", 8, "bold"),
                  fg=C["muted"], bg=C["bg"], anchor="w").pack(fill="x", padx=20)
@@ -474,7 +518,7 @@ class MacroApp:
             b.bind("<Leave>", lambda e, b=b: b.config(fg=C["muted"]))
             b.pack(side="left")
 
-        tk.Label(self.root, text=self.tr("hint"),
+        tk.Label(self.root, text=self.tr("hint") + "   ·   TDS v1.3",
                  font=("Segoe UI", 8), fg=C["muted"], bg=C["bg"]).pack(pady=(0, 10))
 
     def _dark_titlebar(self):
@@ -617,6 +661,9 @@ class MacroApp:
                 self.stop_flag.set()
             else:
                 self.root.after(0, self.play_selected)
+        elif key == keyboard.Key.f6:
+            # แสดง/ซ่อนกรอบตรวจจับบนหน้าจอ (ลากย้าย-ปรับขนาดได้)
+            self.root.after(0, self._toggle_mark)
         elif key == keyboard.Key.esc:
             self.stop_flag.set()
 
@@ -630,6 +677,7 @@ class MacroApp:
             self._start_record()
 
     def _start_record(self):
+        self._close_mark()  # ซ่อนกรอบ mark กันโดนอัดติดไป
         self.events = []
         self.recording = True
         self.t0 = time.perf_counter()
@@ -758,6 +806,11 @@ class MacroApp:
         self._play_start = time.perf_counter()
         self._play_duration = 0
         self.root.after(100, self._tick_progress)
+        # ซ่อนกรอบ mark ก่อนเล่น (กันสีเขียวของกรอบเองหลอกตัวตรวจจับ)
+        self._close_mark()
+        # เริ่มเธรดเฝ้าจับปุ่ม Restart (TDS)
+        self._restart_pending = False
+        threading.Thread(target=self._tds_monitor, daemon=True).start()
         threading.Thread(target=self._play_thread,
                          args=(events, loops, speed, gap, os.path.basename(path)[:-5]),
                          daemon=True).start()
@@ -771,6 +824,17 @@ class MacroApp:
                 self._set_status(self.tr("playing").format(name=name, i=i, total=total),
                                  C["blue"])
                 self._play_once(events, speed)
+                if self._restart_pending:
+                    # เจอปุ่ม Restart: หยุดทุกอย่าง -> คลิกปุ่ม -> รอ 2 วิ -> เริ่มรอบใหม่
+                    self._release_all()
+                    self._set_status(self.tr("tds_found"), C["green"])
+                    self.stop_flag.clear()
+                    self._click_restart()
+                    if self.stop_flag.wait(timeout=2.0):  # กด F4/Esc ระหว่างรอ = หยุดจริง
+                        break
+                    self._restart_pending = False
+                    i -= 1  # รอบที่ถูกขัดจังหวะให้เล่นใหม่ ไม่นับ
+                    continue
                 if self.stop_flag.is_set():
                     break
                 if loops is not None and i >= loops:
@@ -940,6 +1004,148 @@ class MacroApp:
         self.stop_flag.set()
         if self.recording:
             self._stop_record()
+
+    # ---------------- TDS: ตรวจจับปุ่ม Restart สีเขียว ----------------
+    # จุดตรวจ 10 จุด คิดเป็น "สัดส่วน" ของกรอบ -> ปรับขนาดกรอบแล้วจุดขยับตามเอง
+    # กระจายเลี่ยงตัวหนังสือสีขาวตรงกลางปุ่ม
+    TDS_FRAC = ((-0.42, 0.0), (0.42, 0.0), (-0.36, -0.28), (-0.36, 0.28),
+                (0.36, -0.28), (0.36, 0.28), (0.0, -0.33), (0.0, 0.33),
+                (-0.20, 0.30), (0.20, -0.30))
+
+    def _tds_points(self):
+        r = self.tds_rect
+        cx, cy = r["x"] + r["w"] / 2, r["y"] + r["h"] / 2
+        return [(int(cx + fx * r["w"]), int(cy + fy * r["h"]))
+                for fx, fy in self.TDS_FRAC]
+
+    def _update_tds_lbl(self):
+        r = self.tds_rect
+        self.tds_lbl.config(text=f"{r['w']}×{r['h']} @ ({r['x']},{r['y']})")
+
+    @staticmethod
+    def _is_green(rgb):
+        r, g, b = rgb
+        return g >= 90 and g > r + 40 and g > b + 40
+
+    def _tds_check(self):
+        """เขียวอย่างน้อย 5 จาก 10 จุดในกรอบ = เจอปุ่ม Restart"""
+        if get_pixel is None:
+            return False
+        hit = 0
+        for x, y in self._tds_points():
+            try:
+                if self._is_green(get_pixel(x, y)):
+                    hit += 1
+                    if hit >= 5:
+                        return True
+            except Exception:
+                return False
+        return False
+
+    def _tds_monitor(self):
+        """เธรดเฝ้าจอระหว่างเล่น: ต้องเจอ 2 ครั้งติดกัน (กันภาพแวบ) จึงสั่ง restart"""
+        consec = 0
+        while self.playing:
+            if self.tds_var.get() and not self._restart_pending:
+                if self._tds_check():
+                    consec += 1
+                    if consec >= 2:
+                        self._restart_pending = True
+                        self.stop_flag.set()  # หยุดการเล่นทั้งหมดทันที
+                else:
+                    consec = 0
+            time.sleep(0.4)  # ตรวจทุก 0.4 วินาที
+
+    def _click_restart(self):
+        r = self.tds_rect
+        x, y = r["x"] + r["w"] // 2, r["y"] + r["h"] // 2
+        self._move_to(x, y)
+        time.sleep(0.08)
+        self.mouse_ctl.press(Button.left)
+        time.sleep(0.06)
+        self.mouse_ctl.release(Button.left)
+
+    # ---------------- กรอบ Mark บนหน้าจอ (ลากย้าย/ปรับขนาดได้) ----------------
+    def _toggle_mark(self):
+        if self._mark is not None and self._mark.winfo_exists():
+            self._close_mark()
+        else:
+            self._show_mark()
+
+    def _show_mark(self):
+        r = self.tds_rect
+        m = tk.Toplevel(self.root)
+        self._mark = m
+        m.overrideredirect(True)          # ไม่มีขอบหน้าต่าง
+        m.attributes("-topmost", True)
+        key = "#010203"                   # สีนี้จะกลายเป็นโปร่งใส
+        m.config(bg=key)
+        try:
+            m.attributes("-transparentcolor", key)
+        except Exception:
+            m.attributes("-alpha", 0.35)  # fallback: โปร่งแสงทั้งบาน
+        m.geometry(f"{r['w']}x{r['h']}+{r['x']}+{r['y']}")
+        cv = tk.Canvas(m, bg=key, highlightthickness=0, cursor="fleur")
+        cv.pack(fill="both", expand=True)
+        self._mark_cv = cv
+        cv.bind("<Button-1>", self._mark_press)
+        cv.bind("<B1-Motion>", self._mark_drag)
+        cv.bind("<ButtonRelease-1>", self._mark_release)
+        m.bind("<Configure>", lambda e: self._draw_mark())
+        self._draw_mark()
+
+    def _draw_mark(self):
+        if self._mark is None or not self._mark.winfo_exists():
+            return
+        cv = self._mark_cv
+        w = max(self._mark.winfo_width(), 1)
+        h = max(self._mark.winfo_height(), 1)
+        g = "#22c55e"
+        cv.delete("all")
+        # กรอบหนา 5px (จับลากย้ายได้)
+        cv.create_rectangle(2, 2, w - 2, h - 2, outline=g, width=5)
+        # แถบหัวด้านบน ไว้จับลากสะดวกๆ
+        cv.create_rectangle(0, 0, w, 16, fill=g, outline=g)
+        cv.create_text(w // 2, 8, text="RESTART ZONE  (ลากย้าย · มุมขวาล่างปรับขนาด)",
+                       fill="#06270f", font=("Segoe UI", 7, "bold"))
+        # มุมขวาล่างสำหรับปรับขนาด
+        cv.create_rectangle(w - 16, h - 16, w, h, fill=g, outline=g)
+
+    def _mark_press(self, e):
+        m = self._mark
+        w, h = m.winfo_width(), m.winfo_height()
+        self._mk_mode = "resize" if (e.x > w - 18 and e.y > h - 18) else "move"
+        self._mk_start = (e.x_root, e.y_root, m.winfo_x(), m.winfo_y(), w, h)
+
+    def _mark_drag(self, e):
+        sx, sy, x0, y0, w0, h0 = self._mk_start
+        dx, dy = e.x_root - sx, e.y_root - sy
+        if self._mk_mode == "move":
+            self._mark.geometry(f"+{x0 + dx}+{y0 + dy}")
+        else:
+            self._mark.geometry(f"{max(60, w0 + dx)}x{max(28, h0 + dy)}")
+
+    def _mark_release(self, e):
+        m = self._mark
+        self.tds_rect = {"x": m.winfo_x(), "y": m.winfo_y(),
+                         "w": m.winfo_width(), "h": m.winfo_height()}
+        self.cfg["tds_rect"] = self.tds_rect
+        save_settings(self.cfg)
+        self._update_tds_lbl()
+        self._set_status(self.tr("tds_saved"), C["green"])
+
+        def back():
+            if not self.recording and not self.playing:
+                self._set_status(self.tr("ready"), C["green"])
+        self.root.after(1200, back)
+
+    def _close_mark(self):
+        try:
+            if self._mark is not None:
+                self._mark.destroy()
+        except Exception:
+            pass
+        self._mark = None
 
     # ---------------- Manage ----------------
     def rename_macro(self):
