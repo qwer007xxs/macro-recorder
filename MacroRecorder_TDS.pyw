@@ -385,8 +385,8 @@ class MacroApp:
     # ---------------- UI ----------------
     def _build_ui(self):
         self.root.title("Macro Recorder · TDS")
-        self.root.geometry("500x620")
-        self.root.minsize(500, 540)
+        self.root.geometry("530x670")
+        self.root.minsize(530, 590)  # ขั้นต่ำพอให้ตัวเลือกทุกช่องแสดงครบ
         self.root.configure(bg=C["bg"])
         self.root.attributes("-topmost", True)
         self._dark_titlebar()
@@ -466,7 +466,7 @@ class MacroApp:
                                   activebackground=C["card"], activeforeground=C["text"],
                                   cursor="hand2", highlightthickness=0, bd=0)
 
-        self.inf_var = tk.BooleanVar(value=False)
+        self.inf_var = tk.BooleanVar(value=True)  # วนไม่รู้จบเป็นค่าเริ่มต้น
         opt_check(self.tr("infinite"), self.inf_var).grid(
             row=1, column=0, columnspan=3, padx=(12, 0), pady=(8, 12), sticky="w")
         # โหมด Roblox: หมุนกล้องด้วยเดลต้าดิบเฉพาะช่วงคลิกขวาค้าง
@@ -535,7 +535,7 @@ class MacroApp:
             b.bind("<Leave>", lambda e, b=b: b.config(fg=C["muted"]))
             b.pack(side="left")
 
-        tk.Label(self.root, text=self.tr("hint") + "   ·   TDS v1.4",
+        tk.Label(self.root, text=self.tr("hint") + "   ·   TDS v1.5",
                  font=("Segoe UI", 8), fg=C["muted"], bg=C["bg"]).pack(pady=(0, 10))
 
     def _dark_titlebar(self):
