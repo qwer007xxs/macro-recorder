@@ -61,6 +61,12 @@ if sys.platform == "win32":
         inp = _INPUT(0, _MOUSEINPUT(int(dx), int(dy), 0, 0x0001, 0, 0))  # MOUSEEVENTF_MOVE
         ctypes.windll.user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(inp))
 
+    def send_left(down):
+        # กด/ปล่อยปุ่มซ้ายผ่าน SendInput ตรงๆ (LEFTDOWN/LEFTUP)
+        flag = 0x0002 if down else 0x0004
+        inp = _INPUT(0, _MOUSEINPUT(0, 0, 0, flag, 0, 0))
+        ctypes.windll.user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(inp))
+
     # ---- กดคีย์บอร์ดแบบ scancode (ฮาร์ดแวร์จริง) ----
     # เกมส่วนใหญ่ (รวม Roblox) อ่านคีย์บอร์ดด้วย scancode/raw input
     # การยิงแบบ virtual key เฉยๆ เกมจะมองไม่เห็น -> เดิน WASD ค้างพร้อมเมาส์ไม่ได้
@@ -143,6 +149,7 @@ else:
     send_mouse_move = None
     send_mouse_move_rel = None
     send_key = None
+    send_left = None
     get_pixel = None
 
 import tkinter as tk
@@ -196,6 +203,7 @@ L = {
         "tds": "ตรวจจับปุ่ม Restart (TDS)",
         "tds_set": "กรอบ (F6)",
         "tds_saved": "บันทึกกรอบตรวจจับแล้ว ✓",
+        "tds_wait": "รอหลังกด (วิ)",
         "tds_found": "เจอปุ่ม Restart! กดปุ่มแล้วเริ่มรอบใหม่...",
         "no_macro_t": "ไม่มี macro",
         "no_macro_m": "ยังไม่มี macro ให้เล่น — กด F3 เพื่อบันทึกก่อน",
@@ -227,6 +235,7 @@ L = {
         "tds": "Restart detection (TDS)",
         "tds_set": "Zone (F6)",
         "tds_saved": "Detection zone saved ✓",
+        "tds_wait": "Wait after (s)",
         "tds_found": "Restart found! Clicking & restarting...",
         "no_macro_t": "No macro",
         "no_macro_m": "Nothing to play yet — press F3 to record first",
@@ -339,7 +348,7 @@ class MacroApp:
         # เก็บค่าตัวเลือกเดิม แล้วสร้าง UI ใหม่ในภาษาที่เลือก
         vals = (self.loop_var.get(), self.speed_var.get(), self.gap_var.get(),
                 self.inf_var.get(), self.game_var.get(), self.cam_sens_var.get(),
-                self.tds_var.get())
+                self.tds_var.get(), self.wait_var.get())
         for w in self.root.winfo_children():
             w.destroy()
         self._build_ui()
@@ -350,6 +359,7 @@ class MacroApp:
         self.game_var.set(vals[4])
         self.cam_sens_var.set(vals[5])
         self.tds_var.set(vals[6])
+        self.wait_var.set(vals[7])
         self._refresh_list()
 
     @staticmethod
@@ -375,8 +385,8 @@ class MacroApp:
     # ---------------- UI ----------------
     def _build_ui(self):
         self.root.title("Macro Recorder · TDS")
-        self.root.geometry("500x600")
-        self.root.minsize(500, 520)
+        self.root.geometry("500x620")
+        self.root.minsize(500, 540)
         self.root.configure(bg=C["bg"])
         self.root.attributes("-topmost", True)
         self._dark_titlebar()
@@ -472,15 +482,22 @@ class MacroApp:
         # ----- TDS: ตรวจจับปุ่ม Restart สีเขียว -----
         self.tds_var = tk.BooleanVar(value=True)
         opt_check(self.tr("tds"), self.tds_var).grid(
-            row=2, column=0, columnspan=3, padx=(12, 0), pady=(0, 12), sticky="w")
+            row=2, column=0, columnspan=3, padx=(12, 0), pady=(0, 4), sticky="w")
         tds_btn = tk.Button(opt, text=self.tr("tds_set"), command=self._toggle_mark,
                             font=("Segoe UI", 9), bg=C["gray"], fg=C["text"],
                             activebackground=C["gray_h"], activeforeground=C["text"],
                             relief="flat", bd=0, padx=8, pady=2, cursor="hand2")
-        tds_btn.grid(row=2, column=3, padx=(12, 6), pady=(0, 12), sticky="w")
+        tds_btn.grid(row=2, column=3, padx=(12, 6), pady=(0, 4), sticky="w")
+        # รอกี่วินาทีหลังกดปุ่ม Restart ก่อนเริ่ม loop ใหม่ (ตั้งเองได้)
+        opt_label(self.tr("tds_wait")).grid(row=2, column=4, padx=(12, 6),
+                                            pady=(0, 4), sticky="e")
+        self.wait_var = tk.DoubleVar(value=2.0)
+        opt_spin(self.wait_var, from_=0, to=60, increment=0.5).grid(
+            row=2, column=5, pady=(0, 4))
         self.tds_lbl = tk.Label(opt, text="", font=("Segoe UI", 8),
                                 fg=C["muted"], bg=C["card"])
-        self.tds_lbl.grid(row=2, column=4, columnspan=2, pady=(0, 12), sticky="w")
+        self.tds_lbl.grid(row=3, column=0, columnspan=6, padx=(14, 0),
+                          pady=(0, 12), sticky="w")
         self._update_tds_lbl()
 
         # ----- รายการ macro -----
@@ -518,7 +535,7 @@ class MacroApp:
             b.bind("<Leave>", lambda e, b=b: b.config(fg=C["muted"]))
             b.pack(side="left")
 
-        tk.Label(self.root, text=self.tr("hint") + "   ·   TDS v1.3",
+        tk.Label(self.root, text=self.tr("hint") + "   ·   TDS v1.4",
                  font=("Segoe UI", 8), fg=C["muted"], bg=C["bg"]).pack(pady=(0, 10))
 
     def _dark_titlebar(self):
@@ -806,6 +823,11 @@ class MacroApp:
         self._play_start = time.perf_counter()
         self._play_duration = 0
         self.root.after(100, self._tick_progress)
+        # อ่านค่า "รอหลังกด" ที่ผู้ใช้ตั้ง
+        try:
+            self._tds_wait = max(0.0, float(self.wait_var.get()))
+        except Exception:
+            self._tds_wait = 2.0
         # ซ่อนกรอบ mark ก่อนเล่น (กันสีเขียวของกรอบเองหลอกตัวตรวจจับ)
         self._close_mark()
         # เริ่มเธรดเฝ้าจับปุ่ม Restart (TDS)
@@ -830,7 +852,10 @@ class MacroApp:
                     self._set_status(self.tr("tds_found"), C["green"])
                     self.stop_flag.clear()
                     self._click_restart()
-                    if self.stop_flag.wait(timeout=2.0):  # กด F4/Esc ระหว่างรอ = หยุดจริง
+                    # พักตัวตรวจจับ = เวลารอ + 4 วิ (กันเด้งซ้ำตอนเกมกำลังโหลด)
+                    self._tds_cool = time.perf_counter() + self._tds_wait + 4.0
+                    # รอตามวินาทีที่ผู้ใช้ตั้ง (กด F4/Esc ระหว่างรอ = หยุดจริง)
+                    if self.stop_flag.wait(timeout=max(0.05, self._tds_wait)):
                         break
                     self._restart_pending = False
                     i -= 1  # รอบที่ถูกขัดจังหวะให้เล่นใหม่ ไม่นับ
@@ -1046,7 +1071,8 @@ class MacroApp:
         """เธรดเฝ้าจอระหว่างเล่น: ต้องเจอ 2 ครั้งติดกัน (กันภาพแวบ) จึงสั่ง restart"""
         consec = 0
         while self.playing:
-            if self.tds_var.get() and not self._restart_pending:
+            if (self.tds_var.get() and not self._restart_pending
+                    and time.perf_counter() > getattr(self, "_tds_cool", 0)):
                 if self._tds_check():
                     consec += 1
                     if consec >= 2:
@@ -1059,11 +1085,28 @@ class MacroApp:
     def _click_restart(self):
         r = self.tds_rect
         x, y = r["x"] + r["w"] // 2, r["y"] + r["h"] // 2
+        # ลากเมาส์ไปที่ปุ่มก่อน รอ 1 วินาทีให้ชัวร์ว่าเมาส์ถึงแล้ว ค่อยกด
         self._move_to(x, y)
-        time.sleep(0.08)
-        self.mouse_ctl.press(Button.left)
-        time.sleep(0.06)
-        self.mouse_ctl.release(Button.left)
+        time.sleep(1.0)
+        self._move_to(x, y)  # ยืนยันตำแหน่งอีกครั้งกันเมาส์เลื่อน
+        time.sleep(0.05)
+        try:
+            if send_left is not None:
+                send_left(True)
+                time.sleep(0.12)
+                send_left(False)
+                time.sleep(0.05)
+                send_left(False)  # ส่งปล่อยซ้ำอีกครั้ง กันปุ่มค้าง
+            else:
+                self.mouse_ctl.press(Button.left)
+                time.sleep(0.12)
+                self.mouse_ctl.release(Button.left)
+        finally:
+            # ไม่ว่ายังไงก็ต้องปล่อยปุ่มเสมอ
+            try:
+                self.mouse_ctl.release(Button.left)
+            except Exception:
+                pass
 
     # ---------------- กรอบ Mark บนหน้าจอ (ลากย้าย/ปรับขนาดได้) ----------------
     def _toggle_mark(self):
